@@ -124,6 +124,12 @@ config CPU_FREQ_DEFAULT_GOV_INTELLIDEMAND
 	  Use the CPUFreq governor 'intellidemand' as default. This is
 	  based on Ondemand with browsing detection based on GPU loading
 
+config CPU_FREQ_DEFAULT_GOV_SMARTMAX_EPS
+        bool "smartmax_eps"
+        select CPU_FREQ_GOV_SMARTMAX_EPS
+        help
+         Use the CPUFreq governor 'smartmax eps' as default
+
 config CPU_FREQ_DEFAULT_GOV_INTELLIACTIVE
 	bool "intelliactive"
 	select CPU_FREQ_GOV_INTELLIACTIVE
@@ -247,6 +253,12 @@ config CPU_FREQ_GOV_INTELLIDEMAND
           For details, take a look at linux/Documentation/cpu-freq.
 
           If in doubt, say N.
+
+config CPU_FREQ_GOV_SMARTMAX_EPS
+        tristate "'smartmax EPS' cpufreq policy governor"
+        select CPU_FREQ_TABLE
+        help
+          'smartmax EPS' is the extreme powersaving version of smartmax
 
 config INTELLI_MAX_ACTIVE_FREQ
 	int "Max Active Freq for Intellidemand"
