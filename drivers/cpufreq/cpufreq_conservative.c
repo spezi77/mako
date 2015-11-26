@@ -62,7 +62,7 @@ struct cpu_dbs_info_s {
 	struct delayed_work work;
 	unsigned int down_skip;
 	unsigned int requested_freq;
-	int cpu;
+	unsigned int cpu;
 	unsigned int enable:1;
 	/*
 	 * percpu mutex that serializes governor limit change with
@@ -79,6 +79,8 @@ static unsigned int dbs_enable;	/* number of CPUs using this policy */
  * dbs_mutex protects dbs_enable in governor start/stop.
  */
 static DEFINE_MUTEX(dbs_mutex);
+
+static struct workqueue_struct *dbs_wq;
 
 static struct dbs_tuners {
 	unsigned int sampling_rate;
@@ -135,7 +137,7 @@ dbs_cpufreq_notifier(struct notifier_block *nb, unsigned long val,
 
 	/*
 	 * we only care if our internally tracked freq moves outside
-	 * the 'valid' ranges of freqency available to us otherwise
+	 * the 'valid' ranges of frequency available to us otherwise
 	 * we do not change it
 	*/
 	if (this_dbs_info->requested_freq > policy->max
@@ -437,7 +439,8 @@ static void do_dbs_timer(struct work_struct *work)
 	/* We want all CPUs to do sampling nearly on same jiffy */
 	int delay = usecs_to_jiffies(dbs_tuners_ins.sampling_rate);
 
-	delay -= jiffies % delay;
+	if (num_online_cpus() > 1)
+		delay -= jiffies % delay;
 
 	mutex_lock(&dbs_info->timer_mutex);
 
@@ -451,11 +454,14 @@ static inline void dbs_timer_init(struct cpu_dbs_info_s *dbs_info)
 {
 	/* We want all CPUs to do sampling nearly on same jiffy */
 	int delay = usecs_to_jiffies(dbs_tuners_ins.sampling_rate);
-	delay -= jiffies % delay;
+	unsigned int cpu = dbs_info->cpu;
+
+	if (num_online_cpus() > 1)
+		delay -= jiffies % delay;
 
 	dbs_info->enable = 1;
 	INIT_DELAYED_WORK_DEFERRABLE(&dbs_info->work, do_dbs_timer);
-	schedule_delayed_work_on(dbs_info->cpu, &dbs_info->work, delay);
+	queue_delayed_work_on(cpu, dbs_wq, &dbs_info->work, delay);
 }
 
 static inline void dbs_timer_exit(struct cpu_dbs_info_s *dbs_info)
@@ -468,11 +474,12 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 				   unsigned int event)
 {
 	unsigned int cpu = policy->cpu;
-	struct cpu_dbs_info_s *this_dbs_info;
 	unsigned int j;
 	int rc;
+	struct cpu_dbs_info_s *this_dbs_info;
 
 	this_dbs_info = &per_cpu(cs_cpu_dbs_info, cpu);
+	this_dbs_info->cpu = cpu;
 
 	switch (event) {
 	case CPUFREQ_GOV_START:
@@ -492,6 +499,7 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 				j_dbs_info->prev_cpu_nice =
 						kcpustat_cpu(j).cpustat[CPUTIME_NICE];
 		}
+
 		this_dbs_info->down_skip = 0;
 		this_dbs_info->requested_freq = policy->cur;
 
@@ -562,15 +570,14 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 		break;
 
 	case CPUFREQ_GOV_LIMITS:
+		/* If device is being removed, skip set limits */
+		if (!this_dbs_info->cur_policy
+			 || !policy->cur)
+			break;
 		mutex_lock(&this_dbs_info->timer_mutex);
-		if (policy->max < this_dbs_info->cur_policy->cur)
-			__cpufreq_driver_target(
-					this_dbs_info->cur_policy,
-					policy->max, CPUFREQ_RELATION_H);
-		else if (policy->min > this_dbs_info->cur_policy->cur)
-			__cpufreq_driver_target(
-					this_dbs_info->cur_policy,
-					policy->min, CPUFREQ_RELATION_L);
+		__cpufreq_driver_target(this_dbs_info->cur_policy,
+				policy->cur, CPUFREQ_RELATION_L);
+		dbs_check_cpu(this_dbs_info);
 		mutex_unlock(&this_dbs_info->timer_mutex);
 
 		break;
